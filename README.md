@@ -4,7 +4,7 @@
 ## Anggota Kelompok
 | Nama           | NRP        | Kelas     |
 | ---            | ---        | ----------|
-|                |            |           |
+| Farras Nazhif Pratikno               |  5025241260          |      D     |
 |                |            |           |
 
 ## Link Youtube (Unlisted)
