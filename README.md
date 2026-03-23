@@ -243,6 +243,226 @@ elif message.startswith("/download"):
   conn.sendall(b"Downloaded successfully")
 ```
 
+### Server with Poll Code
+
+#### Cara Kerja `poll`
+
+`poll` digunakan agar server bisa menangani banyak koneksi secara bersamaan tanpa harus menunggu satu client selesai dulu. Semua socket didaftarkan ke `poll`, lalu server memanggil `poll()` untuk menunggu aktivitas. Saat ada socket yang siap, server hanya memproses socket tersebut. Sebagai contoh, `accept()` untuk koneksi baru atau `recv()` untuk menerima data dari client. Dengan cara ini, server jadi lebih efisien dan tidak perlu membuat thread untuk setiap client.
+
+- `poll()` menunggu aktivitas dari banyak socket
+- socket didaftarkan dengan `poller.register()`
+- event utama: `POLLIN` (socket siap dibaca)
+- hasil `poll()` berupa `(fd, event)` sehingga perlu mapping ke socket
+
+#### Contoh sesuai state di server
+
+Saat `poll()` mendeteksi ada data dari client, server akan memproses sesuai state masing-masing client:
+
+- **state = normal**, server membaca command (seperti `/list`, `/upload`, `/download`)
+- **state = upload_size**, server menerima ukuran file, lalu membalas `"ok"`
+- **state = upload_data**, server menerima isi file sedikit demi sedikit sampai selesai
+- **state = download_wait_ack**, server menunggu `"ok"` dari client, lalu mengirim file
+
+Dengan ini, setiap client diproses sesuai state-nya masing-masing tanpa saling mengganggu, karena setiap event yang masuk langsung ditangani berdasarkan state client tersebut.
+
+1. Inisialisasi koneksi
+
+```python
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+# allow port to be reused immediately after restart
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.bind((HOST, PORT))
+server.listen(5)
+```
+
+2. Setup poll
+
+```python
+poller = select.poll()
+poller.register(server, select.POLLIN)
+```
+
+3. Mapping FD ke socket
+
+- Mapping file descriptor dari os ke socket object
+
+```python
+fd_to_socket = {server.fileno(): server}
+```
+
+4. Setup new connection/handle existing client
+
+```python
+# new connection
+if sock is server:
+  conn, addr = server.accept()
+  print(f"Connected client from {addr}")
+
+  # set non-blocking
+  conn.setblocking(False)
+
+  # register poll & mapping fd to socket
+  poller.register(conn, select.POLLIN)
+  fd_to_socket[conn.fileno()] = conn
+
+  # initiate state with normal mode (initial state)
+  clients[conn] = {"mode": "normal"}
+
+# existing client
+else:
+  ...
+```
+
+5. Handle state
+
+```python
+# existing client
+else:
+  try:
+      # receive incoming data from client socket
+      data = sock.recv(BUFFER_SIZE)
+
+      # if no data, client has disconnected
+      if not data:
+        raise ConnectionError()
+
+      # get current state of this client
+      state = clients[sock]["mode"]
+
+      # handle initial command (list, upload, download, etc.)
+      if state == "normal":
+        handle_message(sock, data)
+
+      elif state == "upload_size":
+        # receive file size from client
+        filesize = int(data.decode())
+
+        # update state to start receiving file data
+        clients[sock]["mode"] = "upload_data"
+        clients[sock]["filesize"] = filesize
+        clients[sock]["received"] = 0
+
+        # get file path and open file for writing (binary mode)
+        filepath = os.path.join(STORAGE_DIR, clients[sock]["filename"])
+        clients[sock]["file"] = open(filepath, "wb")
+
+        # send ack to client indicating server is ready to receive file
+        sock.sendall(b"ok\n")
+
+      elif state == "upload_data":
+        # write incoming chunk to file
+        f = clients[sock]["file"]
+        f.write(data)
+
+        # track how many bytes have been received
+        clients[sock]["received"] += len(data)
+
+        # check if entire file has been received
+        if clients[sock]["received"] >= clients[sock]["filesize"]:
+          f.close()
+
+          # print log for server and send message to client
+          print(f"Uploaded {clients[sock]['filename']} successfully")
+          sock.sendall(b"Uploaded successfully")
+
+          # reset state to normal
+          clients[sock]["mode"] = "normal"
+
+      elif state == "download_wait_ack":
+        # validate ack from client before sending file
+        if data.decode().strip() != "ok":
+          # ignore invalid ack and wait for correct one by continue looping to outer loop
+          continue
+
+        filepath = clients[sock]["filepath"]
+
+        # read file and send it to client
+        with open(filepath, "rb") as f:
+          while True:
+            chunk = f.read(BUFFER_SIZE)
+            if not chunk:
+              break
+            sock.sendall(chunk)
+
+       # print log for server and send message to client
+        print(f"Downloaded {filepath} successfully")
+        sock.sendall(b"Downloaded successfully")
+
+        # reset state to normal
+        clients[sock]["mode"] = "normal"
+
+  except Exception as err:
+    # handle error and cleanup client connection
+    print(f"Error: {err}")
+
+    poller.unregister(sock)
+    sock.close()
+
+    if sock in clients:
+      del clients[sock]
+    if fd in fd_to_socket:
+      del fd_to_socket[fd]
+```
+
+6. Handle client message
+
+- Kurang lebih kodenya sama dengan synchronous server. Namun, disesuaikan dengan state handler untuk poll.
+
+```python
+def handle_message(sock, data):
+  message = data.decode().strip()
+
+  print(f"Received from {sock.getpeername()}: {message}")
+
+  if message.startswith("/list"):
+    # get list of files in storage directory
+    files = os.listdir(STORAGE_DIR)
+
+    # send file names to client
+    if not files:
+      sock.sendall(b"empty")
+    else:
+      sock.sendall("\n".join(files).encode())
+
+  elif message.startswith("/upload"):
+    # split & check command format
+    parts = message.split()
+    if len(parts) < 2:
+      sock.sendall(b"error: filename required")
+      return
+
+    # parse filename
+    filename = parts[1]
+
+    # set client state to expect file size next
+    clients[sock]["mode"] = "upload_size"
+    clients[sock]["filename"] = filename
+
+  elif message.startswith("/download"):
+    # split & check command format
+    parts = message.split()
+    if len(parts) < 2:
+      sock.sendall(b"error: filename required")
+      return
+
+    # parse filename & get filepath
+    filename = parts[1]
+    filepath = os.path.join(STORAGE_DIR, filename)
+
+    # send "not found" message to client if filepath not exists
+    if not os.path.exists(filepath):
+      sock.sendall(b"File not found")
+      return
+
+    # get filesize & send it to client
+    filesize = os.path.getsize(filepath)
+    sock.sendall(str(filesize).encode())
+
+    # update state to wait for client ack before sending file
+    clients[sock]["mode"] = "download_wait_ack"
+    clients[sock]["filepath"] = filepath
+```
+
 ### Cara Menjalankan program
 
 - Pilih salah satu server yang ingin dijalankan
