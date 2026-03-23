@@ -27,7 +27,7 @@ Link ditaruh di bawah ini
 
 ### Client Code
 
-1. Inisialisasi Koneksi
+1. Inisialisasi koneksi
 
 ```python
 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -138,6 +138,109 @@ elif command.startswith("/download"):
   # receive & print result message from server
   result = client.recv(BUFFER_SIZE)
   print(result.decode())
+```
+
+### Synchronous Server Code
+
+1. Inisialisasi koneksi
+
+```python
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+# allow port to be reused immediately after restart
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.bind((HOST, PORT))
+server.listen(1)
+```
+
+2. List command
+
+- Menggunakan `os.listdir` untuk melihat file yang berada di dalam folder tertentu.
+- Kirim file-file tersebut ke client dengan ` conn.sendall("\n".join(files).encode())`.
+
+```python
+if message.startswith("/list"):
+  files = os.listdir(STORAGE_DIR)
+  if not files:
+    conn.sendall(b"empty")
+  else:
+    conn.sendall("\n".join(files).encode())
+```
+
+3. Upload command
+
+```python
+elif message.startswith("/upload"):
+  # split & check command format
+  parts = message.split()
+  if len(parts) < 2:
+    conn.sendall(b"error: filename required")
+    continue
+
+  # parse filename
+  filename = parts[1]
+
+  # ack command from client
+  conn.sendall(b"ok\n")
+
+  # receive data size from client & parse it into filesize
+  data_size = conn.recv(BUFFER_SIZE)
+  filesize = int(data_size.decode())
+
+  # get filepath
+  filepath = os.path.join(STORAGE_DIR, filename)
+
+  # write the uploaded file from client
+  with open(filepath, "wb") as f:
+    received = 0
+    while received < filesize:
+      chunk = conn.recv(BUFFER_SIZE)
+      if not chunk:
+        break
+      f.write(chunk)
+      received += len(chunk)
+
+  # print log for server and send message to client
+  print(f"Uploaded {filename} from {addr} successfully")
+  conn.sendall(b"Uploaded successfully")
+```
+
+4. Download command
+
+```python
+elif message.startswith("/download"):
+  # split & check command format
+  parts = message.split()
+  if len(parts) < 2:
+    conn.sendall(b"error: filename required")
+    continue
+
+  # parse filename & get filepath
+  filename = parts[1]
+  filepath = os.path.join(STORAGE_DIR, filename)
+
+  # send "not found" message to client if filepath not exists
+  if not os.path.exists(filepath):
+    conn.sendall(b"File not found")
+    continue
+
+  # get filesize & send it to client
+  filesize = os.path.getsize(filepath)
+  conn.sendall(str(filesize).encode())
+
+  # wait for client ack
+  ack = conn.recv(BUFFER_SIZE)
+
+  # read file and send it to client
+  with open(filepath, "rb") as f:
+    while True:
+      chunk = f.read(BUFFER_SIZE)
+      if not chunk:
+        break
+      conn.sendall(chunk)
+
+  # print log for server and send message to client
+  print(f"Downloaded {filename} to {addr}  successfully")
+  conn.sendall(b"Downloaded successfully")
 ```
 
 ### Cara Menjalankan program
