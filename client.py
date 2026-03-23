@@ -67,9 +67,13 @@ def main():
 
               client.sendall(command.encode())
 
-              size_data = client.recv(BUFFER_SIZE)
-              filesize = int(size_data.decode())
-              
+              server_msg = client.recv(BUFFER_SIZE)
+              server_search_msg = str(server_msg.decode())
+
+              if server_search_msg == "File not found":
+                print("File not found on server storage")
+                continue
+
               # send ack
               client.sendall(b"ok\n")
 

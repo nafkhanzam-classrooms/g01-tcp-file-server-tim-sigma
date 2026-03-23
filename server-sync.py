@@ -66,7 +66,7 @@ def handle_client(conn, addr):
         filepath = os.path.join(STORAGE_DIR, filename)
 
         if not os.path.exists(filepath):
-          conn.sendall(b"0")
+          conn.sendall(b"File not found")
           continue
 
         filesize = os.path.getsize(filepath)
