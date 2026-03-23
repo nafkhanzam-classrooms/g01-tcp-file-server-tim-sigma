@@ -98,6 +98,8 @@ def handle_client(conn, addr):
 
 def main():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # allow port to be reused immediately after restart
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((HOST, PORT))
     server.listen(1)  
 

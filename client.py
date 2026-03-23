@@ -73,7 +73,9 @@ def main():
               if server_search_msg == "File not found":
                 print("File not found on server storage")
                 continue
-
+              
+              filesize = int(server_search_msg)
+              
               # send ack
               client.sendall(b"ok\n")
 
