@@ -19,7 +19,13 @@ Link ditaruh di bawah ini
 
 ## Penjelasan Program
 
-### Menjalankan program
+### Broadcast Messages
+
+1. `/list`: menampilkan semua file yang ada di folder storage (dari server).
+2. `/upload`: meng-upload file yang berada di luar folder storage (namun masih di dalam project) ke folder storage (dari server).
+3. `/download`: men-download file yang berada di folder storage (dari server) ke dalam project.
+
+### Cara Menjalankan program
 
 - Pilih salah satu server yang ingin dijalankan
 
