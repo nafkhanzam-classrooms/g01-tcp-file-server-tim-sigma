@@ -4,10 +4,10 @@
 
 ## Anggota Kelompok
 
-| Nama                   | NRP        | Kelas |
-| ---------------------- | ---------- | ----- |
-| Farras Nazhif Pratikno | 5025241260 | D     |
-|                        |            |       |
+| Nama                    | NRP        | Kelas |
+| ----------------------- | ---------- | ----- |
+| Farras Nazhif Pratikno  | 5025241260 | D     |
+| Mohammad Najib Bahrudin | 5025241230 | D     |
 
 ## Link Youtube (Unlisted)
 
@@ -242,6 +242,237 @@ elif message.startswith("/download"):
   print(f"Downloaded {filename} to {addr}  successfully")
   conn.sendall(b"Downloaded successfully")
 ```
+
+### Server with Select
+
+#### Cara Kerja `select`
+
+`select` digunakan agar server bisa menangani banyak koneksi secara bersamaan tanpa harus menunggu satu client selesai dulu. Server menyimpan semua socket (server dan client) dalam sebuah list, lalu memanggil `select()` untuk menunggu aktivitas. Saat ada socket yang siap, server hanya memproses socket tersebut. Misalnya, `accept()` untuk koneksi baru atau `recv()` untuk menerima data dari client. Dengan cara ini, server menjadi lebih efisien dan tidak perlu membuat thread untuk setiap client.
+
+- `select()` menunggu aktivitas dari banyak socket
+- semua socket disimpan dalam list (server + client)
+- event utama: socket siap dibaca (readable)
+- hasil `select()` berupa list socket yang siap
+- server socket → `accept()`, client socket → `recv()`
+
+#### Contoh sesuai state di server
+
+Saat `select()` mendeteksi ada data dari client, server akan memproses sesuai state masing-masing client:
+
+- **state = normal**, server membaca command (seperti `/list`, `/upload`, `/download`)
+- **state = upload_size**, server menerima ukuran file, lalu membalas `"ok"`
+- **state = upload_data**, server menerima isi file sedikit demi sedikit sampai selesai
+- **state = download_wait_ack**, server menunggu `"ok"` dari client, lalu mengirim file
+
+Dengan ini, setiap client diproses sesuai state-nya masing-masing tanpa saling mengganggu, karena setiap socket yang siap diproses secara terpisah berdasarkan event yang diterima.
+
+1. Inisialisasi koneksi
+
+```python
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+server.bind((HOST, PORT))
+server.listen(5)
+```
+
+2. Setup select
+
+```python
+inputs = [server]
+```
+
+3. Menunggu event dengan select
+
+```python
+readable, _, exceptional = select.select(inputs, [], inputs)
+```
+
+- `readable`: socket yang siap dibaca
+- `exceptional`: socket yang error
+- `select()`: akan menunggu sampai ada event/aktivitas
+
+4. Setup new connection / handle existing client
+
+```python
+for sock in readable:
+    # new connection
+    if sock is server:
+        conn, addr = server.accept()
+        print(f"Connected client from {addr}")
+
+        inputs.append(conn)
+        clients[conn] = {"mode": "normal"}
+    # existing client
+    else:
+      ...
+```
+
+5. Handle state
+
+```python
+# existing client
+else:
+  try:
+      data = sock.recv(BUFFER_SIZE)
+
+      if not data:
+        raise ConnectionError()
+
+      state = clients[sock]["mode"]
+
+      if state == "normal":
+        handle_message(sock, data)
+
+      elif state == "upload_size":
+        try:
+          filesize = int(data.decode().strip())
+        except ValueError:
+          sock.sendall(b"error: invalid file size")
+          clients[sock]["mode"] = "normal"
+          continue
+
+        clients[sock]["mode"] = "upload_data"
+        clients[sock]["filesize"] = filesize
+        clients[sock]["received"] = 0
+
+        filepath = os.path.join(STORAGE_DIR, clients[sock]["filename"])
+        clients[sock]["file"] = open(filepath, "wb")
+
+        sock.sendall(b"ok\n")
+
+      elif state == "upload_data":
+        f = clients[sock]["file"]
+        f.write(data)
+
+        clients[sock]["received"] += len(data)
+
+        if clients[sock]["received"] >= clients[sock]["filesize"]:
+          f.close()
+
+          print(f"Uploaded {clients[sock]['filename']} successfully")
+          sock.sendall(b"Uploaded successfully")
+
+          clients[sock]["mode"] = "normal"
+
+      elif state == "download_wait_ack":
+        if data.decode().strip() != "ok":
+          continue
+
+        filepath = clients[sock]["filepath"]
+
+        with open(filepath, "rb") as f:
+          while True:
+            chunk = f.read(BUFFER_SIZE)
+            if not chunk:
+              break
+            sock.sendall(chunk)
+
+        print(f"Downloaded {filepath} successfully")
+        sock.sendall(b"Downloaded successfully")
+
+        clients[sock]["mode"] = "normal"
+
+  except Exception as err:
+      print(f"Error handling {sock.getpeername()}: {err}")
+
+      if sock in inputs:
+        inputs.remove(sock)
+
+      if sock in clients:
+        if "file" in clients[sock] and not clients[sock]["file"].closed:
+          clients[sock]["file"].close()
+        del clients[sock]
+
+      sock.close()
+```
+
+6. Handle client message
+
+```python
+def handle_message(sock, data):
+  try:
+    message = data.decode().strip()
+  except UnicodeDecodeError:
+    return
+
+  if message:
+    print(f"Received from {sock.getpeername()}: {message}")
+
+  if message.startswith("/list"):
+    files = os.listdir(STORAGE_DIR)
+    if not files:
+      sock.sendall(b"empty")
+    else:
+      sock.sendall("\n".join(files).encode())
+
+  elif message.startswith("/upload"):
+    parts = message.split()
+    if len(parts) < 2:
+      sock.sendall(b"error: filename required")
+      return
+
+    filename = parts[1]
+
+    clients[sock]["mode"] = "upload_size"
+    clients[sock]["filename"] = filename
+
+  elif message.startswith("/download"):
+    parts = message.split()
+    if len(parts) < 2:
+      sock.sendall(b"error: filename required")
+      return
+
+    filename = parts[1]
+    filepath = os.path.join(STORAGE_DIR, filename)
+
+    if not os.path.exists(filepath):
+      sock.sendall(b"File not found")
+      return
+
+    filesize = os.path.getsize(filepath)
+    sock.sendall(str(filesize).encode())
+
+    clients[sock]["mode"] = "download_wait_ack"
+    clients[sock]["filepath"] = filepath
+
+  else:
+    addr = sock.getpeername()
+    broadcast(f"[{addr[0]}:{addr[1]}] {message}", sock)
+```
+
+7. Broadcast message
+
+```python
+def broadcast(message, sender_sock):
+    for sock in list(clients.keys()):
+        if sock != sender_sock and sock.fileno() != -1:
+            try:
+                sock.sendall(message.encode())
+            except Exception:
+                pass
+
+    sender_sock.sendall(b"Message broadcasted to other clients")
+```
+
+- Mengirim pesan ke semua client kecuali pengirim
+- Mengirim ACK ke sender agar tidak blocking
+
+8. Handle exceptional socket
+
+```python
+for sock in exceptional:
+    if sock in inputs:
+        inputs.remove(sock)
+    if sock in clients:
+        if "file" in clients[sock] and not clients[sock]["file"].closed:
+            clients[sock]["file"].close()
+        del clients[sock]
+    sock.close()
+```
+
+- Menangani socket yang error
+- Clean up resources
 
 ### Server with Poll Code
 
