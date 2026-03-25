@@ -884,6 +884,28 @@ finally:
 - Menghapus client dari list
 - Menutup koneksi
 
+### Perbedaan Server: Sync, Thread, Select, dan Poll
+
+- **Synchronous**
+  - Menangani satu client dalam satu waktu
+  - Tidak efisien untuk banyak client karena client lain harus menunggu
+
+- **Thread**
+  - Setiap client ditangani oleh thread terpisah
+  - Bisa berjalan paralel
+  - Memiliki overhead tinggi (banyak thread) dan perlu sinkronisasi (lock)
+
+- **Select**
+  - Menggunakan satu thread dengan event loop
+  - Memantau banyak socket dalam satu waktu
+  - Memiliki batas jumlah socket (limit OS)
+
+- **Poll**
+  - Mirip dengan select tetapi lebih scalable
+  - Menggunakan file descriptor dan event
+  - Tidak memiliki limit jumlah socket seperti select
+  - Lebih efisien untuk jumlah client besar, tetapi lebih kompleks
+
 ### Cara Menjalankan program
 
 - Pilih salah satu server yang ingin dijalankan
