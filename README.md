@@ -704,6 +704,186 @@ def handle_message(sock, data):
     clients[sock]["filepath"] = filepath
 ```
 
+### Server with Thread
+
+#### Cara Kerja `thread`
+
+`thread` adalah metode yang digunakan server agar dapat menangani banyak koneksi secara bersamaan dengan membuat satu thread untuk setiap client. Setiap kali ada client baru yang terhubung, server akan membuat thread baru yang khusus menangani komunikasi dengan client tersebut. Dengan cara ini, setiap client dapat diproses secara paralel tanpa saling menunggu, karena masing-masing berjalan di thread yang berbeda.
+
+- setiap client ditangani oleh thread terpisah
+- server utama hanya menerima koneksi (`accept()`)
+- komunikasi client dilakukan di dalam fungsi `handle_client`
+- tidak perlu event loop seperti `select` atau `poll`
+- menggunakan `lock` untuk menghindari race condition pada shared data
+
+#### Contoh alur di server
+
+Saat ada client yang terhubung:
+
+- server menerima koneksi dengan `accept()`
+- server membuat thread baru untuk client tersebut
+- thread menjalankan `handle_client()`
+
+Di dalam thread, server akan memproses request secara langsung:
+
+- client mengirim command `/list` → server mengirim daftar file
+- client mengirim `/upload` → server menerima file sampai selesai
+- client mengirim `/download` → server mengirim file ke client
+- jika bukan command → pesan akan di-broadcast ke client lain
+
+Dengan ini, setiap client diproses secara paralel di thread masing-masing. Namun, karena ada data bersama (seperti list `clients`), diperlukan `lock` agar tidak terjadi konflik antar thread.
+
+1. Inisialisasi koneksi
+
+```python
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+server.bind((HOST, PORT))
+server.listen(5)
+```
+
+- Membuat socket TCP server
+- `SO_REUSEADDR` agar port bisa langsung digunakan kembali
+- `listen(5)` untuk menerima beberapa koneksi
+
+2. Setup thread handling
+
+```python
+conn, addr = server.accept()
+
+client_thread = threading.Thread(
+    target=handle_client,
+    args=(conn, addr),
+    daemon=True
+)
+client_thread.start()
+```
+
+- Main thread hanya bertugas menerima koneksi
+- Setiap client akan ditangani oleh **thread terpisah**
+- `daemon=True` agar thread otomatis berhenti saat server mati
+
+3. Shared clients list
+
+```python
+clients = []
+clients_lock = threading.Lock()
+```
+
+- Menyimpan semua koneksi client aktif
+- `clients_lock` digunakan untuk **sinkronisasi akses list** (thread-safe)
+
+4. Handle new connection
+
+```python
+def handle_client(conn, addr):
+    print(f"Connected client from {addr}")
+
+    with clients_lock:
+        clients.append(conn)
+```
+
+- Setiap client masuk ke dalam list
+- Menggunakan lock untuk mencegah race condition
+
+5. Handle existing client
+
+```python
+while True:
+    data = conn.recv(BUFFER_SIZE)
+
+    if not data:
+        break
+```
+
+- Menerima data dari client
+- Jika kosong → client disconnect
+
+6. Handle command (state implicit)
+
+```python
+message = data.decode().strip()
+```
+
+- Decode data menjadi string
+- Berbeda dengan `poll/select`, di sini **tidak pakai state machine eksplisit**
+- Flow dikontrol langsung oleh urutan kode
+
+Command `/list`
+
+```python
+files = os.listdir(STORAGE_DIR)
+```
+
+- Mengambil daftar file
+- Mengirim ke client
+
+Command `/upload`
+
+```python
+conn.sendall(b"ok\n")
+```
+
+- Kirim ACK ke client
+
+```python
+data_size = conn.recv(BUFFER_SIZE)
+filesize = int(data_size.decode().strip())
+```
+
+- Terima ukuran file
+
+```python
+while received < filesize:
+    chunk = conn.recv(BUFFER_SIZE)
+```
+
+- Terima file per chunk
+- Simpan ke storage
+
+```python
+conn.sendall(b"Uploaded successfully")
+```
+
+Command `/download`
+
+```python
+conn.sendall(str(filesize).encode())
+```
+
+- Kirim ukuran file ke client
+
+```python
+ack = conn.recv(BUFFER_SIZE)
+```
+
+- Tunggu ACK dari client
+
+```python
+with open(filepath, "rb") as f:
+    conn.sendall(chunk)
+```
+
+- Kirim file ke client
+
+```python
+conn.sendall(b"Downloaded successfully")
+```
+
+7. Cleanup connection
+
+```python
+finally:
+    with clients_lock:
+        if conn in clients:
+            clients.remove(conn)
+    conn.close()
+```
+
+- Menghapus client dari list
+- Menutup koneksi
+
 ### Cara Menjalankan program
 
 - Pilih salah satu server yang ingin dijalankan
