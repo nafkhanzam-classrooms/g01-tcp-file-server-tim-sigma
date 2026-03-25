@@ -496,6 +496,16 @@ Saat `poll()` mendeteksi ada data dari client, server akan memproses sesuai stat
 
 Dengan ini, setiap client diproses sesuai state-nya masing-masing tanpa saling mengganggu, karena setiap event yang masuk langsung ditangani berdasarkan state client tersebut.
 
+#### Perbedaan `poll` dengan `select`
+
+`select` dan `poll` sama-sama digunakan untuk menangani banyak koneksi secara non-blocking, namun memiliki perbedaan dalam cara kerja dan skalabilitas. `select` menggunakan list socket dan memiliki batas jumlah socket yang bisa dimonitor, sedangkan `poll` menggunakan file descriptor (fd) dengan event yang lebih fleksibel dan tidak memiliki batasan jumlah socket yang sama seperti `select`. Selain itu, `poll` lebih efisien untuk jumlah koneksi yang besar karena tidak perlu memeriksa seluruh list socket setiap kali dipanggil.
+
+- `select` menggunakan list socket, `poll` menggunakan fd + event
+- `select` memiliki limit jumlah socket, `poll` lebih scalable
+- `select` lebih sederhana, `poll` lebih efisien untuk banyak koneksi
+- `select` mengembalikan list socket, `poll` mengembalikan `(fd, event)`
+- `poll` lebih cocok untuk sistem dengan jumlah client besar
+
 1. Inisialisasi koneksi
 
 ```python
