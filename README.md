@@ -935,6 +935,10 @@ python client.py
 
 ![Synchronous Client Result](docs/client-sync.png)
 
+### Server with Select
+
+![Server with Select Result](docs/server-select.png)
+
 ### Server with Poll
 
 - Server
@@ -948,3 +952,7 @@ python client.py
 - Client 2
 
 ![Client with Poll Result](docs/client-2-poll.png)
+
+### Server with Thread
+
+![Server with Thread Result](docs/server-thread.png)
